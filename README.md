@@ -107,6 +107,13 @@ branches across candidate repos, not with the number of repos.
 
 Remaining API quota is displayed after each load.
 
+### Excluding public repos
+
+Enabling **Exclude public repo commits** filters the result down to commits on
+private repositories only. Each repo's `isPrivate` flag is read alongside its
+commit history (no extra requests), and repos whose visibility can't be
+determined are kept rather than silently dropped.
+
 ## Known limitations
 
 - **Default branch by default.** Commits are read from each repository's default

@@ -180,6 +180,7 @@ export async function fetchAffiliatedRepos(
 const HISTORY_QUERY = `
   query($owner: String!, $name: String!, $author: ID!, $since: GitTimestamp!, $until: GitTimestamp!, $cursor: String) {
     repository(owner: $owner, name: $name) {
+      isPrivate
       defaultBranchRef {
         target {
           ... on Commit {
@@ -307,10 +308,12 @@ async function collectHistory(
   query: string,
   pick: (data: never) => HistoryPage | null | undefined,
   sink: Map<string, Commit>,
+  onData?: (data: never) => void,
 ): Promise<void> {
   let cursor: string | null = null;
   do {
     const data = await graphql<never>(token, query, { ...variables, cursor });
+    onData?.(data);
     const history = pick(data);
     if (!history) break;
 
@@ -338,6 +341,12 @@ async function collectHistory(
  * hasn't been merged yet still shows up. That costs roughly one extra request
  * per branch.
  */
+export interface RepoCommitsResult {
+  commits: Commit[];
+  /** Null when the repository's visibility couldn't be determined. */
+  isPrivate: boolean | null;
+}
+
 export async function fetchRepoCommits(
   token: string,
   repoFullName: string,
@@ -345,7 +354,7 @@ export async function fetchRepoCommits(
   from: Date,
   to: Date,
   allBranches = false,
-): Promise<Commit[]> {
+): Promise<RepoCommitsResult> {
   const [owner, name] = repoFullName.split("/");
   const base = {
     owner,
@@ -355,6 +364,7 @@ export async function fetchRepoCommits(
     until: to.toISOString(),
   };
   const byOid = new Map<string, Commit>();
+  let isPrivate: boolean | null = null;
 
   await collectHistory(
     token,
@@ -365,6 +375,13 @@ export async function fetchRepoCommits(
       (d as { repository?: { defaultBranchRef?: { target?: { history?: HistoryPage } } } })
         .repository?.defaultBranchRef?.target?.history,
     byOid,
+    (d: never) => {
+      if (isPrivate === null) {
+        isPrivate =
+          (d as { repository?: { isPrivate?: boolean } }).repository?.isPrivate ??
+          null;
+      }
+    },
   );
 
   if (allBranches) {
@@ -393,7 +410,7 @@ export async function fetchRepoCommits(
     }
   }
 
-  return [...byOid.values()];
+  return { commits: [...byOid.values()], isPrivate };
 }
 
 export interface FetchProgress {
@@ -415,6 +432,10 @@ export interface FetchProgress {
  * by SHA) rather than just the default branch. Combined with the affiliated-repo
  * fallback this also catches repos whose only activity is on a feature branch,
  * which contribution data omits until the work is merged.
+ *
+ * When `excludePublicRepos` is set, commits to public repositories are dropped
+ * so only private-repo activity is counted. Repos whose visibility couldn't be
+ * determined are kept, to avoid silently under-counting.
  */
 export async function fetchCommits(
   token: string,
@@ -422,6 +443,7 @@ export async function fetchCommits(
   to: Date,
   onProgress?: (progress: FetchProgress) => void,
   allBranches = false,
+  excludePublicRepos = false,
 ): Promise<Commit[]> {
   const login = await fetchViewerLogin(token);
   const authorId = await fetchViewerId(token);
@@ -459,16 +481,16 @@ export async function fetchCommits(
       usedFallback,
     });
     try {
-      all.push(
-        ...(await fetchRepoCommits(
-          token,
-          repos[i],
-          authorId,
-          from,
-          to,
-          allBranches,
-        )),
+      const { commits, isPrivate } = await fetchRepoCommits(
+        token,
+        repos[i],
+        authorId,
+        from,
+        to,
+        allBranches,
       );
+      if (excludePublicRepos && isPrivate === false) continue;
+      all.push(...commits);
     } catch (err) {
       // A single inaccessible repo shouldn't abort the whole range.
       console.warn(`Skipping ${repos[i]}:`, err);

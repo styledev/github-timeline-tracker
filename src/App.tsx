@@ -8,6 +8,7 @@ import "./App.css";
 
 const TOKEN_KEY = "gtt.token";
 const ALL_BRANCHES_KEY = "gtt.allBranches";
+const EXCLUDE_PUBLIC_KEY = "gtt.excludePublicRepos";
 
 function isoDate(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
@@ -34,6 +35,9 @@ export default function App() {
   const [allBranches, setAllBranches] = useState(
     () => localStorage.getItem(ALL_BRANCHES_KEY) === "true",
   );
+  const [excludePublicRepos, setExcludePublicRepos] = useState(
+    () => localStorage.getItem(EXCLUDE_PUBLIC_KEY) === "true",
+  );
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<FetchProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +55,11 @@ export default function App() {
   function toggleAllBranches(value: boolean) {
     setAllBranches(value);
     localStorage.setItem(ALL_BRANCHES_KEY, String(value));
+  }
+
+  function toggleExcludePublicRepos(value: boolean) {
+    setExcludePublicRepos(value);
+    localStorage.setItem(EXCLUDE_PUBLIC_KEY, String(value));
   }
 
   async function load() {
@@ -77,6 +86,7 @@ export default function App() {
         toDate,
         setProgress,
         allBranches,
+        excludePublicRepos,
       );
       setCommits(result);
     } catch (err) {
@@ -142,6 +152,18 @@ export default function App() {
             <em>
               — catches unmerged work; slower and uses more API quota
             </em>
+          </span>
+        </label>
+
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={excludePublicRepos}
+            onChange={(e) => toggleExcludePublicRepos(e.target.checked)}
+          />
+          <span>
+            Exclude public repo commits{" "}
+            <em>— only count activity on private repositories</em>
           </span>
         </label>
 

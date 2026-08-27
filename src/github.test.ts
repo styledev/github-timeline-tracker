@@ -35,7 +35,10 @@ const viewerId: Handler = {
   respond: () => ({ data: { viewer: { id: "UID" } } }),
 };
 
-function historyHandler(byRepo: Record<string, string[]>): Handler {
+function historyHandler(
+  byRepo: Record<string, string[]>,
+  isPrivateByRepo: Record<string, boolean> = {},
+): Handler {
   return {
     match: (q) => q.includes("defaultBranchRef"),
     respond: (vars) => {
@@ -44,6 +47,7 @@ function historyHandler(byRepo: Record<string, string[]>): Handler {
       return {
         data: {
           repository: {
+            isPrivate: isPrivateByRepo[full] ?? false,
             defaultBranchRef: {
               target: {
                 history: {
@@ -242,6 +246,84 @@ describe("fetchCommits discovery", () => {
 
     const commits = await fetchCommits("t", FROM, TO);
     expect(commits.map((c) => c.repo)).toEqual(["me/ok"]);
+  });
+});
+
+describe("excludePublicRepos", () => {
+  it("drops commits from public repos when enabled", async () => {
+    mockGraphQL([
+      viewerLogin,
+      viewerId,
+      {
+        match: (q) => q.includes("contributionsCollection"),
+        respond: () => ({
+          data: {
+            user: {
+              contributionsCollection: {
+                commitContributionsByRepository: [
+                  { repository: { nameWithOwner: "me/public-repo" } },
+                  { repository: { nameWithOwner: "me/private-repo" } },
+                ],
+              },
+            },
+          },
+        }),
+      },
+      historyHandler(
+        {
+          "me/public-repo": [new Date(2026, 2, 5, 10, 0).toISOString()],
+          "me/private-repo": [new Date(2026, 2, 6, 10, 0).toISOString()],
+        },
+        { "me/public-repo": false, "me/private-repo": true },
+      ),
+    ]);
+
+    const commits = await fetchCommits(
+      "t",
+      FROM,
+      TO,
+      undefined,
+      false,
+      true,
+    );
+
+    expect(commits.map((c) => c.repo)).toEqual(["me/private-repo"]);
+  });
+
+  it("keeps commits from every repo when disabled", async () => {
+    mockGraphQL([
+      viewerLogin,
+      viewerId,
+      {
+        match: (q) => q.includes("contributionsCollection"),
+        respond: () => ({
+          data: {
+            user: {
+              contributionsCollection: {
+                commitContributionsByRepository: [
+                  { repository: { nameWithOwner: "me/public-repo" } },
+                  { repository: { nameWithOwner: "me/private-repo" } },
+                ],
+              },
+            },
+          },
+        }),
+      },
+      historyHandler(
+        {
+          "me/public-repo": [new Date(2026, 2, 5, 10, 0).toISOString()],
+          "me/private-repo": [new Date(2026, 2, 6, 10, 0).toISOString()],
+        },
+        { "me/public-repo": false, "me/private-repo": true },
+      ),
+    ]);
+
+    const commits = await fetchCommits("t", FROM, TO);
+
+    expect(commits.map((c) => c.repo).sort()).toEqual([
+      "me/private-repo",
+      "me/public-repo",
+    ]);
   });
 });
 
