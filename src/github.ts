@@ -112,67 +112,66 @@ export async function fetchContributedRepos(
   return [...repos].sort();
 }
 
-const AFFILIATED_REPOS_QUERY = `
-  query($cursor: String) {
-    viewer {
-      repositories(
-        first: 100
-        after: $cursor
-        affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
-        orderBy: { field: PUSHED_AT, direction: DESC }
-      ) {
-        pageInfo { hasNextPage endCursor }
-        nodes { nameWithOwner isArchived pushedAt }
-      }
-    }
-    rateLimit { remaining limit resetAt }
-  }
-`;
+const REST_URL = "https://api.github.com";
+const REPOS_PAGE_SIZE = 100;
+
+interface RestRepo {
+  full_name: string;
+  archived: boolean;
+  pushed_at: string | null;
+}
 
 /**
  * Fallback repo discovery for tokens where `contributionsCollection` yields
  * nothing (notably fine-grained tokens, whose GraphQL contribution support is
  * inconsistent). Lists repositories the viewer is affiliated with and keeps
- * those pushed to at or after `from`. `pushedAt` is repo-wide rather than
+ * those pushed to at or after `from`. `pushed_at` is repo-wide rather than
  * per-author, so this over-selects; the per-repo history query then filters
  * down to the viewer's own commits in range.
+ *
+ * Uses REST `/user/repos` because GraphQL `viewer.repositories` omits
+ * organization repos when the token's resource owner is that organization.
  */
 export async function fetchAffiliatedRepos(
   token: string,
   from: Date,
 ): Promise<string[]> {
   const repos: string[] = [];
-  let cursor: string | null = null;
 
-  do {
-    const data: {
-      viewer: {
-        repositories: {
-          pageInfo: { hasNextPage: boolean; endCursor: string | null };
-          nodes: {
-            nameWithOwner: string;
-            isArchived: boolean;
-            pushedAt: string | null;
-          }[];
-        };
-      };
-    } = await graphql(token, AFFILIATED_REPOS_QUERY, { cursor });
+  for (let page = 1; ; page++) {
+    const params = new URLSearchParams({
+      affiliation: "owner,collaborator,organization_member",
+      sort: "pushed",
+      direction: "desc",
+      per_page: String(REPOS_PAGE_SIZE),
+      page: String(page),
+    });
+    const res = await fetch(`${REST_URL}/user/repos?${params}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (res.status === 401) {
+      throw new GitHubError("Invalid or expired token (401 Unauthorized).");
+    }
+    if (!res.ok) {
+      throw new GitHubError(`GitHub API error ${res.status} ${res.statusText}`);
+    }
 
-    const page = data.viewer.repositories;
+    const list = (await res.json()) as RestRepo[];
     let exhausted = false;
-    for (const node of page.nodes) {
-      if (!node.pushedAt) continue;
-      if (new Date(node.pushedAt) < from) {
-        // Sorted by PUSHED_AT desc, so everything after this is older too.
+    for (const repo of list) {
+      if (!repo.pushed_at) continue;
+      if (new Date(repo.pushed_at) < from) {
+        // Sorted by push date desc, so everything after this is older too.
         exhausted = true;
         break;
       }
-      if (!node.isArchived) repos.push(node.nameWithOwner);
+      if (!repo.archived) repos.push(repo.full_name);
     }
-
-    cursor =
-      !exhausted && page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-  } while (cursor);
+    if (exhausted || list.length < REPOS_PAGE_SIZE) break;
+  }
 
   return [...new Set(repos)].sort();
 }

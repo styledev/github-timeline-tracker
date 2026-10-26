@@ -58,12 +58,12 @@ this repository and nothing is committed.
 
 ## Scripts
 
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Start the dev server |
+| Command         | Description                         |
+| --------------- | ----------------------------------- |
+| `npm run dev`   | Start the dev server                |
 | `npm run build` | Type-check and build for production |
-| `npm test` | Run the aggregation unit tests |
-| `npm run lint` | Lint the source |
+| `npm test`      | Run the aggregation unit tests      |
+| `npm run lint`  | Lint the source                     |
 
 ## How data is fetched
 

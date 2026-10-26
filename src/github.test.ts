@@ -6,13 +6,18 @@ interface Handler {
   respond: (variables: Record<string, unknown>) => unknown;
 }
 
-/** Route GraphQL calls to canned responses based on the query body. */
+/**
+ * Route GraphQL calls to canned responses based on the query body. REST calls
+ * (no body) are routed using the request URL as the "query".
+ */
 function mockGraphQL(handlers: Handler[]) {
   const calls: string[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_url: string, init: { body: string }) => {
-      const { query, variables } = JSON.parse(init.body);
+    vi.fn(async (url: string, init: { body?: string }) => {
+      const { query, variables } = init.body
+        ? JSON.parse(init.body)
+        : { query: url, variables: {} };
       const handler = handlers.find((h) => h.match(query));
       if (!handler) throw new Error(`Unhandled query: ${query.slice(0, 80)}`);
       calls.push(query);
@@ -24,6 +29,24 @@ function mockGraphQL(handlers: Handler[]) {
     }),
   );
   return calls;
+}
+
+interface RestRepoFixture {
+  name: string;
+  archived?: boolean;
+  pushedAt: string;
+}
+
+function affiliatedRepos(repos: RestRepoFixture[]): Handler {
+  return {
+    match: (q) => q.includes("/user/repos"),
+    respond: () =>
+      repos.map((r) => ({
+        full_name: r.name,
+        archived: r.archived ?? false,
+        pushed_at: r.pushedAt,
+      })),
+  };
 }
 
 const viewerLogin: Handler = {
@@ -125,25 +148,9 @@ describe("fetchCommits discovery", () => {
           },
         }),
       },
-      {
-        match: (q) => q.includes("affiliations"),
-        respond: () => ({
-          data: {
-            viewer: {
-              repositories: {
-                pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [
-                  {
-                    nameWithOwner: "me/beta",
-                    isArchived: false,
-                    pushedAt: new Date(2026, 2, 20).toISOString(),
-                  },
-                ],
-              },
-            },
-          },
-        }),
-      },
+      affiliatedRepos([
+          { name: "me/beta", archived: false, pushedAt: new Date(2026, 2, 20).toISOString() },
+      ]),
       historyHandler({
         "me/beta": [new Date(2026, 2, 20, 9, 0).toISOString()],
       }),
@@ -166,25 +173,9 @@ describe("fetchCommits discovery", () => {
         match: (q) => q.includes("contributionsCollection"),
         respond: () => ({ errors: [{ message: "not supported" }] }),
       },
-      {
-        match: (q) => q.includes("affiliations"),
-        respond: () => ({
-          data: {
-            viewer: {
-              repositories: {
-                pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [
-                  {
-                    nameWithOwner: "me/gamma",
-                    isArchived: false,
-                    pushedAt: new Date(2026, 2, 10).toISOString(),
-                  },
-                ],
-              },
-            },
-          },
-        }),
-      },
+      affiliatedRepos([
+          { name: "me/gamma", archived: false, pushedAt: new Date(2026, 2, 10).toISOString() },
+      ]),
       historyHandler({
         "me/gamma": [new Date(2026, 2, 10, 8, 0).toISOString()],
       }),
@@ -346,25 +337,9 @@ describe("allBranches mode", () => {
         },
       }),
     },
-    {
-      match: (q) => q.includes("affiliations"),
-      respond: () => ({
-        data: {
-          viewer: {
-            repositories: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [
-                {
-                  nameWithOwner: "me/votepro-v2",
-                  isArchived: false,
-                  pushedAt: new Date(2026, 2, 15).toISOString(),
-                },
-              ],
-            },
-          },
-        },
-      }),
-    },
+    affiliatedRepos([
+        { name: "me/votepro-v2", archived: false, pushedAt: new Date(2026, 2, 15).toISOString() },
+    ]),
     {
       match: (q) => q.includes('refPrefix: "refs/heads/"'),
       respond: () => ({
@@ -478,19 +453,7 @@ describe("allBranches mode", () => {
           },
         }),
       },
-      {
-        match: (q) => q.includes("affiliations"),
-        respond: () => ({
-          data: {
-            viewer: {
-              repositories: {
-                pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [],
-              },
-            },
-          },
-        }),
-      },
+      affiliatedRepos([]),
       {
         match: (q) => q.includes('refPrefix: "refs/heads/"'),
         respond: () => ({
@@ -618,35 +581,11 @@ describe("fetchRepoBranches", () => {
 describe("fetchAffiliatedRepos", () => {
   it("excludes archived repos and those pushed before the range", async () => {
     mockGraphQL([
-      {
-        match: (q) => q.includes("affiliations"),
-        respond: () => ({
-          data: {
-            viewer: {
-              repositories: {
-                pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [
-                  {
-                    nameWithOwner: "me/fresh",
-                    isArchived: false,
-                    pushedAt: new Date(2026, 2, 20).toISOString(),
-                  },
-                  {
-                    nameWithOwner: "me/archived",
-                    isArchived: true,
-                    pushedAt: new Date(2026, 2, 19).toISOString(),
-                  },
-                  {
-                    nameWithOwner: "me/stale",
-                    isArchived: false,
-                    pushedAt: new Date(2025, 0, 1).toISOString(),
-                  },
-                ],
-              },
-            },
-          },
-        }),
-      },
+      affiliatedRepos([
+          { name: "me/fresh", archived: false, pushedAt: new Date(2026, 2, 20).toISOString() },
+          { name: "me/archived", archived: true, pushedAt: new Date(2026, 2, 19).toISOString() },
+          { name: "me/stale", archived: false, pushedAt: new Date(2025, 0, 1).toISOString() },
+      ]),
     ]);
 
     expect(await fetchAffiliatedRepos("t", FROM)).toEqual(["me/fresh"]);
